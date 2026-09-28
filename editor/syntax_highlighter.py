@@ -1,15 +1,23 @@
 """Syntax highlighting configurations and styles for SmartIDE."""
+import importlib
 from typing import Dict, Any
 from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtCore import QRegularExpression
 
-# Check QScintilla availability
+# Check QScintilla availability without hard-failing on environments where the
+# optional PyQt6.Qsci package is not installed.
 try:
-    from PyQt6.Qsci import QsciScintilla, QsciLexerPython
+    _qscintilla_module = importlib.import_module("PyQt6.Qsci")
+    QsciScintilla = _qscintilla_module.QsciScintilla
+    QsciLexerPython = _qscintilla_module.QsciLexerPython
     from PyQt6.QtGui import QColor as PQColor, QFont as PQFont
     HAS_QSCI = True
-except ImportError:
+except (ImportError, AttributeError):
     HAS_QSCI = False
+    QsciScintilla = None
+    QsciLexerPython = None
+    PQColor = None
+    PQFont = None
 
 # Professional Dark Theme Color Palette
 DARK_THEME_COLORS = {

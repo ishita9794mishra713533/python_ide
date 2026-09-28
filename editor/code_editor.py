@@ -27,8 +27,18 @@ from editor.syntax_highlighter import (
 )
 
 if HAS_QSCI:
-    from PyQt6.Qsci import QsciScintilla, QsciLexerPython
-    from PyQt6.QtGui import QColor as PQColor
+    # Load the optional binding dynamically so environments without QScintilla
+    # do not produce an unresolved-import warning or fail at module import time.
+    try:
+        import importlib
+
+        _qsci_module = importlib.import_module("PyQt6.Qsci")
+        _qtgui_module = importlib.import_module("PyQt6.QtGui")
+        QsciScintilla = _qsci_module.QsciScintilla
+        QsciLexerPython = _qsci_module.QsciLexerPython
+        PQColor = _qtgui_module.QColor
+    except ImportError:
+        HAS_QSCI = False
 
 logger = get_logger("code_editor")
 
