@@ -107,8 +107,6 @@ QToolButton:pressed {
 QDockWidget {
     color: #ffffff;
     font-weight: 600;
-    titlebar-close-icon: url(none);
-    titlebar-normal-icon: url(none);
 }
 
 QDockWidget::title {
@@ -126,8 +124,8 @@ QDockWidget::title:hover {
     color: #ffffff;
 }
 
-/* Tree View (File Explorer) */
-QTreeView {
+/* Tree View */
+QTreeView, QTreeWidget {
     background-color: #252526;
     color: #cccccc;
     border: none;
@@ -135,30 +133,25 @@ QTreeView {
     show-decoration-selected: 1;
 }
 
-QTreeView::item {
+QTreeView::item, QTreeWidget::item {
     padding: 4px 6px;
     border-radius: 3px;
     border: none;
 }
 
-QTreeView::item:hover {
+QTreeView::item:hover, QTreeWidget::item:hover {
     background-color: #2a2d2e;
     color: #ffffff;
 }
 
-QTreeView::item:selected {
+QTreeView::item:selected, QTreeWidget::item:selected {
     background-color: #37373d;
     color: #ffffff;
 }
 
-QTreeView::item:selected:active {
+QTreeView::item:selected:active, QTreeWidget::item:selected:active {
     background-color: #094771;
     color: #ffffff;
-}
-
-QTreeView::branch:has-children:!has-siblings:closed,
-QTreeView::branch:closed:has-children:has-siblings {
-    border-image: none;
 }
 
 QHeaderView::section {
@@ -217,6 +210,20 @@ QTabBar::tab:selected {
 QTabBar::tab:hover:!selected {
     background-color: #353535;
     color: #d4d4d4;
+}
+
+/* Table Widget */
+QTableWidget {
+    background-color: #1e1e1e;
+    alternate-background-color: #252526;
+    color: #d4d4d4;
+    gridline-color: #333333;
+    border: 1px solid #333333;
+}
+
+QTableWidget::item:selected {
+    background-color: #094771;
+    color: #ffffff;
 }
 
 /* Scroll Bars */
@@ -291,7 +298,7 @@ QPushButton:disabled {
 }
 
 /* Line Edit / Input */
-QLineEdit {
+QLineEdit, QPlainTextEdit, QTextEdit {
     background-color: #3c3c3c;
     color: #cccccc;
     border: 1px solid #555555;
@@ -299,7 +306,7 @@ QLineEdit {
     padding: 5px 8px;
 }
 
-QLineEdit:focus {
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
     border: 1px solid #007acc;
     background-color: #333333;
 }
@@ -320,3 +327,15 @@ def apply_dark_theme(app) -> None:
     app.setStyleSheet(DARK_THEME_QSS)
 
 
+class DarkTheme:
+    """Helper class for Dark theme stylesheet."""
+    @staticmethod
+    def get_stylesheet() -> str:
+        return DARK_THEME_QSS
+
+
+class LightTheme:
+    """Fallback helper class for Light theme."""
+    @staticmethod
+    def get_stylesheet() -> str:
+        return DARK_THEME_QSS

@@ -1,25 +1,15 @@
 """Syntax highlighting configurations and styles for SmartIDE."""
-import importlib
 from typing import Dict, Any
 from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtCore import QRegularExpression
 
-# Check QScintilla availability without hard-failing on environments where the
-# optional PyQt6.Qsci package is not installed.
 try:
-    _qscintilla_module = importlib.import_module("PyQt6.Qsci")
-    QsciScintilla = _qscintilla_module.QsciScintilla
-    QsciLexerPython = _qscintilla_module.QsciLexerPython
+    from PyQt6.Qsci import QsciScintilla, QsciLexerPython
     from PyQt6.QtGui import QColor as PQColor, QFont as PQFont
     HAS_QSCI = True
-except (ImportError, AttributeError):
+except ImportError:
     HAS_QSCI = False
-    QsciScintilla = None
-    QsciLexerPython = None
-    PQColor = None
-    PQFont = None
 
-# Professional Dark Theme Color Palette
 DARK_THEME_COLORS = {
     "background": "#1e1e1e",
     "foreground": "#d4d4d4",
@@ -47,16 +37,13 @@ def configure_qsci_python_lexer(lexer: Any) -> None:
     if not HAS_QSCI or not isinstance(lexer, QsciLexerPython):
         return
 
-    # Base font
     code_font = PQFont("Consolas", 11)
     code_font.setFixedPitch(True)
     lexer.setFont(code_font)
 
-    # Set default background & foreground
     lexer.setDefaultPaper(PQColor(DARK_THEME_COLORS["background"]))
     lexer.setDefaultColor(PQColor(DARK_THEME_COLORS["foreground"]))
 
-    # Style mapping
     style_configs = {
         QsciLexerPython.Default: (DARK_THEME_COLORS["foreground"], False, False),
         QsciLexerPython.Comment: (DARK_THEME_COLORS["comment"], False, True),
@@ -96,7 +83,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         super().__init__(parent)
         self._highlighting_rules = []
 
-        # Keywords format
         keyword_format = QTextCharFormat()
         keyword_format.setForeground(QColor(DARK_THEME_COLORS["keyword"]))
         keyword_format.setFontWeight(QFont.Weight.Bold)
@@ -114,7 +100,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         for pattern in keywords:
             self._highlighting_rules.append((QRegularExpression(pattern), keyword_format))
 
-        # Built-ins format
         builtin_format = QTextCharFormat()
         builtin_format.setForeground(QColor("#4ec9b0"))
         builtins = [
@@ -126,34 +111,28 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         for pattern in builtins:
             self._highlighting_rules.append((QRegularExpression(pattern), builtin_format))
 
-        # Function definition format
         func_format = QTextCharFormat()
         func_format.setForeground(QColor(DARK_THEME_COLORS["function"]))
         self._highlighting_rules.append((QRegularExpression(r"\bdef\s+([A-Za-z_0-9]+)"), func_format))
 
-        # Class definition format
         class_format = QTextCharFormat()
         class_format.setForeground(QColor(DARK_THEME_COLORS["class_name"]))
         class_format.setFontWeight(QFont.Weight.Bold)
         self._highlighting_rules.append((QRegularExpression(r"\bclass\s+([A-Za-z_0-9]+)"), class_format))
 
-        # Decorator format
         decorator_format = QTextCharFormat()
         decorator_format.setForeground(QColor(DARK_THEME_COLORS["decorator"]))
         self._highlighting_rules.append((QRegularExpression(r"@[A-Za-z_0-9.]+"), decorator_format))
 
-        # Numbers format
         number_format = QTextCharFormat()
         number_format.setForeground(QColor(DARK_THEME_COLORS["number"]))
         self._highlighting_rules.append((QRegularExpression(r"\b[0-9]+(\.[0-9]+)?\b"), number_format))
 
-        # String format (single and double quotes)
         self.string_format = QTextCharFormat()
         self.string_format.setForeground(QColor(DARK_THEME_COLORS["string"]))
         self._highlighting_rules.append((QRegularExpression(r"\"[^\"]*\""), self.string_format))
         self._highlighting_rules.append((QRegularExpression(r"'[^']*'"), self.string_format))
 
-        # Single-line Comment format
         self.comment_format = QTextCharFormat()
         self.comment_format.setForeground(QColor(DARK_THEME_COLORS["comment"]))
         self.comment_format.setFontItalic(True)
@@ -166,5 +145,3 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             while match_iterator.hasNext():
                 match = match_iterator.next()
                 self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
-
-

@@ -7,7 +7,6 @@ from utils.constants import LOG_FILE_PATH, APP_DATA_DIR
 
 def setup_logger(log_level: int = logging.INFO) -> logging.Logger:
     """Configure and return the root application logger."""
-    # Ensure data directory exists
     try:
         APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -16,7 +15,6 @@ def setup_logger(log_level: int = logging.INFO) -> logging.Logger:
     logger = logging.getLogger("SmartIDE")
     logger.setLevel(log_level)
 
-    # Avoid duplicate handlers if already configured
     if logger.handlers:
         return logger
 
@@ -25,13 +23,11 @@ def setup_logger(log_level: int = logging.INFO) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(log_level)
     logger.addHandler(console_handler)
 
-    # File handler
     try:
         file_handler = logging.FileHandler(str(LOG_FILE_PATH), encoding="utf-8")
         file_handler.setFormatter(formatter)

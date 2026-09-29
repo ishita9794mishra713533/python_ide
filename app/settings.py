@@ -41,6 +41,11 @@ class SettingsManager:
         self._settings.setValue(SETTING_LAST_PROJECT, resolved)
         self.add_recent_project(project_path)
 
+    def clear_last_project(self) -> None:
+        """Clear saved last project."""
+        self._settings.remove(SETTING_LAST_PROJECT)
+        self._settings.remove("last_project")
+
     def get_recent_projects(self) -> List[str]:
         """Return the list of recent project directory paths."""
         recents = self._settings.value(SETTING_RECENT_PROJECTS, defaultValue=[], type=list)
@@ -84,3 +89,11 @@ class SettingsManager:
     def set_theme(self, theme_name: str) -> None:
         """Set active theme name."""
         self._settings.setValue(SETTING_THEME, theme_name)
+
+    def get(self, key: str, default=None):
+        """Generic getter."""
+        return self._settings.value(key, defaultValue=default)
+
+    def set(self, key: str, value) -> None:
+        """Generic setter."""
+        self._settings.setValue(key, value)

@@ -1,52 +1,59 @@
-"""Code Editor component implementing QScintilla with professional dark theme."""
-import sys
-from pathlib import Path
-from typing import Optional, Tuple, Any
+"""
+Code Editor component for SmartIDE using PySide6 QPlainTextEdit.
+Features:
+- Line number gutter margin
+- Active line highlighting
+- Python syntax highlighting
+- Auto-indentation & 4-space tab handling
+- Find & replace operations
+- Live cursor position tracking
+"""
 
-from PySide6.QtCore import Qt, Signal
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Optional, Tuple
+
+from PySide6.QtCore import Qt, Signal, QRect, QSize
 from PySide6.QtWidgets import (
     QWidget,
-    QVBoxLayout,
     QPlainTextEdit,
+    QTextEdit,
     QMessageBox,
 )
 from PySide6.QtGui import (
     QColor,
     QFont,
-    QWindow,
+    QPainter,
     QTextCursor,
     QTextDocument,
+    QTextFormat,
 )
 
 from utils.logger import get_logger
-from editor.syntax_highlighter import (
-    HAS_QSCI,
-    DARK_THEME_COLORS,
-    configure_qsci_python_lexer,
-    PythonSyntaxHighlighter,
-)
-
-if HAS_QSCI:
-    # Load the optional binding dynamically so environments without QScintilla
-    # do not produce an unresolved-import warning or fail at module import time.
-    try:
-        import importlib
-
-        _qsci_module = importlib.import_module("PyQt6.Qsci")
-        _qtgui_module = importlib.import_module("PyQt6.QtGui")
-        QsciScintilla = _qsci_module.QsciScintilla
-        QsciLexerPython = _qsci_module.QsciLexerPython
-        PQColor = _qtgui_module.QColor
-    except ImportError:
-        HAS_QSCI = False
+from editor.syntax_highlighter import DARK_THEME_COLORS, PythonSyntaxHighlighter
 
 logger = get_logger("code_editor")
 
 
-class CodeEditor(QWidget):
-    """High-performance Python Code Editor wrapping QScintilla."""
+class LineNumberArea(QWidget):
+    """Left gutter displaying line numbers for CodeEditor."""
 
-    # Signals
+    def __init__(self, editor: CodeEditor):
+        super().__init__(editor)
+        self.code_editor = editor
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.code_editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event) -> None:
+        self.code_editor.line_number_area_paint_event(event)
+
+
+class CodeEditor(QPlainTextEdit):
+    """Professional, high-performance Python code editor widget."""
+
     modification_changed = Signal(bool)
     cursor_position_changed = Signal(int, int)
     file_saved = Signal(Path)
@@ -55,142 +62,250 @@ class CodeEditor(QWidget):
         super().__init__(parent)
         self.file_path: Optional[Path] = file_path
         self._is_modified: bool = False
-        self._qsci_scintilla: Optional[Any] = None
-        self._plain_text_edit: Optional[QPlainTextEdit] = None
-        self._using_qsci: bool = HAS_QSCI
+        self._using_qsci: bool = False  # Compatibility flag
 
-        self._setup_ui()
+        self._setup_editor()
+
+        # Line number area
+        self.line_number_area = LineNumberArea(self)
+
+        self.blockCountChanged.connect(self._update_line_number_area_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self.cursorPositionChanged.connect(self._on_cursor_changed)
+        self.textChanged.connect(self._on_text_changed)
+
+        self._update_line_number_area_width(0)
+        self._highlight_current_line()
+
+        # Syntax highlighter
+        self.highlighter = PythonSyntaxHighlighter(self.document())
+
         if self.file_path:
             self.load_file(self.file_path)
 
-    def _setup_ui(self) -> None:
-        """Initialize the editor layout and editor engine."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+    # -------------------------------------------------------------------------
+    # Styling & Setup
+    # -------------------------------------------------------------------------
+    def _setup_editor(self) -> None:
+        """Apply editor font, tab width, and palette."""
+        font = QFont("Consolas", 12)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setFixedPitch(True)
+        self.setFont(font)
 
-        if self._using_qsci:
-            try:
-                self._setup_qsci_editor(layout)
-                return
-            except Exception as e:
-                logger.error("Failed to initialize QScintilla editor, falling back to native editor: %s", e)
-                self._using_qsci = False
+        # 4 spaces tab stop
+        metrics = self.fontMetrics()
+        self.setTabStopDistance(4 * metrics.horizontalAdvance(' '))
 
-        # Fallback to PySide6 native editor
-        self._setup_native_editor(layout)
+        self.setStyleSheet(
+            f"QPlainTextEdit {{ "
+            f"background-color: {DARK_THEME_COLORS['background']}; "
+            f"color: {DARK_THEME_COLORS['foreground']}; "
+            f"selection-background-color: {DARK_THEME_COLORS['selection']}; "
+            f"selection-color: #ffffff; "
+            f"border: none; "
+            f"}}"
+        )
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
-    def _setup_qsci_editor(self, layout: QVBoxLayout) -> None:
-        """Configure QScintilla with line numbers, caret highlighting, and Python lexer."""
-        sci = QsciScintilla()
-        self._qsci_scintilla = sci
+    # -------------------------------------------------------------------------
+    # Line Number Margin
+    # -------------------------------------------------------------------------
+    def line_number_area_width(self) -> int:
+        digits = max(1, len(str(max(1, self.blockCount()))))
+        space = 20 + self.fontMetrics().horizontalAdvance('9') * digits
+        return space
 
-        # UTF-8 encoding
-        sci.setUtf8(True)
+    def _update_line_number_area_width(self, _) -> None:
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
 
-        # Python Lexer with dark theme
-        self.lexer = QsciLexerPython(sci)
-        configure_qsci_python_lexer(self.lexer)
-        sci.setLexer(self.lexer)
+    def _update_line_number_area(self, rect: QRect, dy: int) -> None:
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
 
-        # Line numbers margin (Margin 0)
-        sci.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
-        sci.setMarginWidth(0, "0000")
-        sci.setMarginsForegroundColor(PQColor(DARK_THEME_COLORS["line_number_fg"]))
-        sci.setMarginsBackgroundColor(PQColor(DARK_THEME_COLORS["line_number_bg"]))
-        sci.setMarginLineNumbers(0, True)
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_area_width(0)
 
-        # Code folding margin (Margin 1)
-        sci.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle, 1)
-        sci.setFoldMarginColors(
-            PQColor(DARK_THEME_COLORS["fold_margin_bg"]),
-            PQColor(DARK_THEME_COLORS["fold_margin_bg"]),
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height())
         )
 
-        # Current line highlighting
-        sci.setCaretLineVisible(True)
-        sci.setCaretLineBackgroundColor(PQColor(DARK_THEME_COLORS["caret_line"]))
+    def line_number_area_paint_event(self, event) -> None:
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor(DARK_THEME_COLORS["line_number_bg"]))
 
-        # Caret appearance
-        sci.setCaretForegroundColor(PQColor(DARK_THEME_COLORS["caret"]))
-        sci.setCaretWidth(2)
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
 
-        # Indentation & Tabs
-        sci.setTabWidth(4)
-        sci.setIndentationsUseTabs(False)
-        sci.setAutoIndent(True)
-        sci.setIndentationGuides(True)
-        sci.setIndentationGuidesForegroundColor(PQColor(DARK_THEME_COLORS["indent_guide"]))
+        painter.setPen(QColor(DARK_THEME_COLORS["line_number_fg"]))
+        font = self.font()
+        font.setPointSize(max(8, self.font().pointSize() - 1))
+        painter.setFont(font)
 
-        # Selection colors
-        sci.setSelectionBackgroundColor(PQColor(DARK_THEME_COLORS["selection"]))
-        sci.setSelectionForegroundColor(PQColor("#ffffff"))
+        current_line = self.textCursor().blockNumber()
 
-        # Base Font
-        base_font = QFont("Consolas", 11)
-        base_font.setFixedPitch(True)
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                num_str = str(block_number + 1)
+                if block_number == current_line:
+                    painter.setPen(QColor("#ffffff"))
+                else:
+                    painter.setPen(QColor(DARK_THEME_COLORS["line_number_fg"]))
 
-        # Connect signals
-        sci.modificationChanged.connect(self._on_modification_changed)
-        sci.cursorPositionChanged.connect(self._on_qsci_cursor_changed)
+                painter.drawText(
+                    0,
+                    top,
+                    self.line_number_area.width() - 8,
+                    self.fontMetrics().height(),
+                    Qt.AlignmentFlag.AlignRight,
+                    num_str,
+                )
 
-        # Wrap in PySide6 container
-        win = QWindow.fromWinId(int(sci.winId()))
-        container = QWidget.createWindowContainer(win, self)
-        layout.addWidget(container)
-        logger.info("QScintilla editor initialized successfully.")
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
 
-    def _setup_native_editor(self, layout: QVBoxLayout) -> None:
-        """Configure PySide6 QPlainTextEdit with syntax highlighting fallback."""
-        self._plain_text_edit = QPlainTextEdit(self)
-        self._plain_text_edit.setStyleSheet(
-            f"QPlainTextEdit {{ background-color: {DARK_THEME_COLORS['background']}; "
-            f"color: {DARK_THEME_COLORS['foreground']}; font-family: 'Consolas'; font-size: 14px; "
-            f"selection-background-color: {DARK_THEME_COLORS['selection']}; border: none; }}"
-        )
-        self.highlighter = PythonSyntaxHighlighter(self._plain_text_edit.document())
+    # -------------------------------------------------------------------------
+    # Active Line Highlight
+    # -------------------------------------------------------------------------
+    def _highlight_current_line(self) -> None:
+        extra_selections = []
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor(DARK_THEME_COLORS["caret_line"]))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extra_selections.append(selection)
 
-        self._plain_text_edit.textChanged.connect(lambda: self._on_modification_changed(True))
-        self._plain_text_edit.cursorPositionChanged.connect(self._on_native_cursor_changed)
+        self.setExtraSelections(extra_selections)
 
-        layout.addWidget(self._plain_text_edit)
-        logger.info("Native QPlainTextEdit editor initialized as fallback.")
+    def _on_cursor_changed(self) -> None:
+        self._highlight_current_line()
+        self.line_number_area.update()
+        line, col = self.get_cursor_position()
+        self.cursor_position_changed.emit(line, col)
+
+    def _on_text_changed(self) -> None:
+        if not self._is_modified:
+            self.set_modified(True)
+
+    # -------------------------------------------------------------------------
+    # Keyboard Handling (Indentation, Auto-Indent, 4 Spaces)
+    # -------------------------------------------------------------------------
+    def keyPressEvent(self, event) -> None:
+        # Tab -> 4 spaces
+        if event.key() == Qt.Key.Key_Tab:
+            cursor = self.textCursor()
+            if cursor.hasSelection():
+                # Indent selected lines
+                self._indent_selection(forward=True)
+            else:
+                self.insertPlainText("    ")
+            return
+
+        # Shift + Tab -> Unindent 4 spaces
+        if event.key() == Qt.Key.Key_Backtab:
+            self._indent_selection(forward=False)
+            return
+
+        # Return / Enter -> Auto-indentation
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            cursor = self.textCursor()
+            block = cursor.block()
+            line_text = block.text()
+            
+            # Count leading spaces
+            match = re.match(r"^([ \t]*)", line_text)
+            indent = match.group(1) if match else ""
+
+            # If line ended with ':', add 4 more spaces
+            stripped = line_text.rstrip()
+            if stripped.endswith(":"):
+                indent += "    "
+
+            super().keyPressEvent(event)
+            self.insertPlainText(indent)
+            return
+
+        super().keyPressEvent(event)
+
+    def _indent_selection(self, forward: bool = True) -> None:
+        cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        cursor.setPosition(start)
+        start_block = cursor.block().blockNumber()
+        cursor.setPosition(end)
+        end_block = cursor.block().blockNumber()
+
+        cursor.beginEditBlock()
+        for b_idx in range(start_block, end_block + 1):
+            block = self.document().findBlockByNumber(b_idx)
+            cur = QTextCursor(block)
+            cur.movePosition(QTextCursor.MoveOperation.StartOfLine)
+            if forward:
+                cur.insertText("    ")
+            else:
+                text = block.text()
+                if text.startswith("    "):
+                    for _ in range(4):
+                        cur.deleteChar()
+                elif text.startswith("\t") or text.startswith(" "):
+                    cur.deleteChar()
+        cursor.endEditBlock()
+
+    # -------------------------------------------------------------------------
+    # Public API & Text Operations
+    # -------------------------------------------------------------------------
+    @property
+    def language(self) -> str:
+        if self.file_path:
+            ext = self.file_path.suffix.lower()
+            if ext in (".py", ".pyw"):
+                return "python"
+            elif ext == ".sql":
+                return "sql"
+            elif ext == ".json":
+                return "json"
+            elif ext == ".md":
+                return "markdown"
+        return "python"
 
     def get_text(self) -> str:
-        """Retrieve full text from the editor."""
-        if self._using_qsci and self._qsci_scintilla:
-            return self._qsci_scintilla.text()
-        elif self._plain_text_edit:
-            return self._plain_text_edit.toPlainText()
-        return ""
+        return self.toPlainText()
 
-    def set_text(self, text: str) -> None:
-        """Set full text in the editor."""
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.setText(text)
-            self._qsci_scintilla.setModified(False)
-        elif self._plain_text_edit:
-            self._plain_text_edit.setPlainText(text)
-            self._plain_text_edit.document().setModified(False)
-        self.set_modified(False)
+    def set_text(self, text: str, mark_modified: Optional[bool] = None) -> None:
+        self.setPlainText(text)
+        if mark_modified is not None:
+            self.set_modified(mark_modified)
+        else:
+            self.set_modified(True)
 
-    def load_file(self, path: Path) -> bool:
-        """Load file contents into editor using UTF-8."""
+    def load_file(self, path: Path | str) -> bool:
         p = Path(path).resolve()
         try:
             with open(p, "r", encoding="utf-8") as f:
                 content = f.read()
-            self.set_text(content)
+            self.setPlainText(content)
             self.file_path = p
             self.set_modified(False)
             logger.info("Loaded file successfully: %s", p)
             return True
         except UnicodeDecodeError:
-            # Fallback with error handling
             try:
                 with open(p, "r", encoding="latin-1") as f:
                     content = f.read()
-                self.set_text(content)
+                self.setPlainText(content)
                 self.file_path = p
                 self.set_modified(False)
                 return True
@@ -201,8 +316,7 @@ class CodeEditor(QWidget):
             logger.error("Error reading file %s: %s", p, e)
             return False
 
-    def save_file(self, target_path: Optional[Path] = None) -> bool:
-        """Save editor text to filesystem."""
+    def save_file(self, target_path: Optional[Path | str] = None) -> bool:
         dest = target_path or self.file_path
         if not dest:
             logger.warning("Attempted to save file without path.")
@@ -210,18 +324,12 @@ class CodeEditor(QWidget):
 
         dest = Path(dest).resolve()
         try:
-            # Ensure parent directories exist
             dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "w", encoding="utf-8") as f:
-                f.write(self.get_text())
+                f.write(self.toPlainText())
 
             self.file_path = dest
             self.set_modified(False)
-            if self._using_qsci and self._qsci_scintilla:
-                self._qsci_scintilla.setModified(False)
-            elif self._plain_text_edit:
-                self._plain_text_edit.document().setModified(False)
-
             logger.info("Saved file successfully: %s", dest)
             self.file_saved.emit(dest)
             return True
@@ -231,124 +339,104 @@ class CodeEditor(QWidget):
             return False
 
     def is_modified(self) -> bool:
-        """Check if editor has unsaved changes."""
         return self._is_modified
 
     def set_modified(self, modified: bool) -> None:
-        """Set modification state and emit signal."""
         if self._is_modified != modified:
             self._is_modified = modified
+            self.document().setModified(modified)
             self.modification_changed.emit(modified)
 
     def get_file_name(self) -> str:
-        """Return the base file name or Untitled."""
         return self.file_path.name if self.file_path else "Untitled"
 
     def get_cursor_position(self) -> Tuple[int, int]:
-        """Return 1-indexed (line, column)."""
-        if self._using_qsci and self._qsci_scintilla:
-            line, col = self._qsci_scintilla.getCursorPosition()
-            return line + 1, col + 1
-        elif self._plain_text_edit:
-            cursor = self._plain_text_edit.textCursor()
-            return cursor.blockNumber() + 1, cursor.columnNumber() + 1
-        return 1, 1
+        cursor = self.textCursor()
+        return cursor.blockNumber() + 1, cursor.columnNumber() + 1
 
-    # Editor Operations
-    def undo(self) -> None:
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.undo()
-        elif self._plain_text_edit:
-            self._plain_text_edit.undo()
+    def get_current_line(self) -> int:
+        line, _ = self.get_cursor_position()
+        return line
 
-    def redo(self) -> None:
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.redo()
-        elif self._plain_text_edit:
-            self._plain_text_edit.redo()
+    def get_current_column(self) -> int:
+        _, col = self.get_cursor_position()
+        return col
 
-    def cut(self) -> None:
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.cut()
-        elif self._plain_text_edit:
-            self._plain_text_edit.cut()
+    def select_all(self) -> None:
+        self.selectAll()
 
-    def copy(self) -> None:
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.copy()
-        elif self._plain_text_edit:
-            self._plain_text_edit.copy()
-
-    def paste(self) -> None:
-        if self._using_qsci and self._qsci_scintilla:
-            self._qsci_scintilla.paste()
-        elif self._plain_text_edit:
-            self._plain_text_edit.paste()
-
-    def find_text(self, expr: str, forward: bool = True, case_sensitive: bool = False, whole_word: bool = False) -> bool:
-        """Search for text in editor."""
+    # -------------------------------------------------------------------------
+    # Find & Replace
+    # -------------------------------------------------------------------------
+    def find_text(
+        self,
+        expr: str,
+        forward: bool = True,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+    ) -> bool:
         if not expr:
             return False
 
-        if self._using_qsci and self._qsci_scintilla:
-            return self._qsci_scintilla.findFirst(
-                expr,
-                False,  # re
-                case_sensitive,
-                whole_word,
-                True,   # wrap
-                forward
-            )
-        elif self._plain_text_edit:
-            flags = QTextDocument.FindFlag(0)
-            if not forward:
-                flags |= QTextDocument.FindFlag.FindBackward
-            if case_sensitive:
-                flags |= QTextDocument.FindFlag.FindCaseSensitively
-            if whole_word:
-                flags |= QTextDocument.FindFlag.FindWholeWords
-            found = self._plain_text_edit.find(expr, flags)
-            return found
-        return False
+        flags = QTextDocument.FindFlag(0)
+        if not forward:
+            flags |= QTextDocument.FindFlag.FindBackward
+        if case_sensitive:
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
+        if whole_word:
+            flags |= QTextDocument.FindFlag.FindWholeWords
 
-    def replace_text(self, expr: str, replacement: str, forward: bool = True, case_sensitive: bool = False, whole_word: bool = False) -> bool:
-        """Replace the current selection or find next and replace."""
-        if self._using_qsci and self._qsci_scintilla:
-            if self._qsci_scintilla.hasSelectedText() and (
-                (case_sensitive and self._qsci_scintilla.selectedText() == expr)
-                or (not case_sensitive and self._qsci_scintilla.selectedText().lower() == expr.lower())
-            ):
-                self._qsci_scintilla.replace(replacement)
-                self.find_text(expr, forward, case_sensitive, whole_word)
-                return True
+        found = self.find(expr, flags)
+        if not found:
+            # Wrap around search
+            cursor = self.textCursor()
+            if forward:
+                cursor.movePosition(QTextCursor.MoveOperation.Start)
             else:
-                if self.find_text(expr, forward, case_sensitive, whole_word):
-                    self._qsci_scintilla.replace(replacement)
-                    return True
-                return False
-        elif self._plain_text_edit:
-            cursor = self._plain_text_edit.textCursor()
-            if cursor.hasSelection():
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.setTextCursor(cursor)
+            found = self.find(expr, flags)
+
+        return found
+
+    def replace_text(
+        self,
+        expr: str,
+        replacement: str,
+        forward: bool = True,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+    ) -> bool:
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            selected = cursor.selectedText()
+            matches = (selected == expr) if case_sensitive else (selected.lower() == expr.lower())
+            if matches:
                 cursor.insertText(replacement)
                 self.find_text(expr, forward, case_sensitive, whole_word)
                 return True
-            elif self.find_text(expr, forward, case_sensitive, whole_word):
-                cursor = self._plain_text_edit.textCursor()
-                cursor.insertText(replacement)
-                return True
+
+        if self.find_text(expr, forward, case_sensitive, whole_word):
+            self.textCursor().insertText(replacement)
+            return True
+
         return False
 
-    def replace_all(self, expr: str, replacement: str, case_sensitive: bool = False, whole_word: bool = False) -> int:
-        """Replace all occurrences in the entire document."""
+    def replace_all(
+        self,
+        expr: str,
+        replacement: str,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+    ) -> int:
         if not expr:
             return 0
-        count = 0
-        current_text = self.get_text()
+
+        current_text = self.toPlainText()
         if case_sensitive:
             count = current_text.count(expr)
             new_text = current_text.replace(expr, replacement)
         else:
-            import re
             flags = 0 if case_sensitive else re.IGNORECASE
             pattern = re.escape(expr)
             if whole_word:
@@ -358,15 +446,5 @@ class CodeEditor(QWidget):
         if count > 0:
             self.set_text(new_text)
             self.set_modified(True)
+
         return count
-
-    # Internal Slots
-    def _on_modification_changed(self, modified: bool) -> None:
-        self.set_modified(modified)
-
-    def _on_qsci_cursor_changed(self, line: int, col: int) -> None:
-        self.cursor_position_changed.emit(line + 1, col + 1)
-
-    def _on_native_cursor_changed(self) -> None:
-        line, col = self.get_cursor_position()
-        self.cursor_position_changed.emit(line, col)

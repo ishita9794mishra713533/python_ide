@@ -1,4 +1,4 @@
-"""General helper functions for filesystem, path formatting, and icons."""
+"""General helper functions for filesystem, path formatting, and safety checks."""
 from pathlib import Path
 from typing import Optional
 
@@ -32,3 +32,22 @@ def get_relative_display_path(file_path: Path, project_root: Optional[Path]) -> 
         except ValueError:
             pass
     return str(file_path)
+
+
+def get_file_extension(filename: str) -> str:
+    """Return the file extension including the dot (e.g. '.py')."""
+    return Path(filename).suffix
+
+
+def is_python_file(filename: str) -> bool:
+    """Check if file has a Python extension (.py, .pyw)."""
+    return get_file_extension(filename).lower() in [".py", ".pyw"]
+
+
+def sanitize_filename(filename: str) -> str:
+    """Replace illegal filename characters with underscores."""
+    invalid_chars = '<>:"/\\|?*'
+    result = filename
+    for ch in invalid_chars:
+        result = result.replace(ch, "_")
+    return result

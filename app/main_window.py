@@ -1,422 +1,592 @@
-"""Main application window for SmartIDE."""
+"""
+SmartIDE - Main Application Window
+Coordinates all components: Menu bar, Toolbar, File Explorer, Editor Manager,
+Database Explorer, SQL Console, and Status Bar.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QProcess, Slot, QByteArray
+from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QMenuBar,
-    QMenu,
-    QToolBar,
-    QStatusBar,
-    QDockWidget,
-    QFileDialog,
-    QMessageBox,
-    QPushButton,
-    QFrame,
+    QMainWindow, QDockWidget, QFileDialog, QMessageBox,
+    QStatusBar, QLabel, QWidget, QVBoxLayout, QTextEdit,
+    QPushButton, QHBoxLayout, QTabWidget, QSplitter
 )
-from PySide6.QtGui import QAction, QKeySequence
 
+from app.settings import SettingsManager
+from app.styles import DarkTheme, LightTheme
 from utils.constants import APP_NAME, APP_VERSION
 from utils.logger import get_logger
-from app.settings import SettingsManager
 from explorer.file_explorer import FileExplorerWidget
-from explorer.file_manager import FileManager
+from editor.editor_manager import EditorManager
+from database.sqlite_manager import SQLiteManager
+from database.database_explorer import DatabaseExplorer
+from database.sql_console import SQLConsole
+from database.table_viewer import TableViewerDialog
+from dialogs.find_replace_dialog import FindReplaceDialog
 
-logger = get_logger("main_window")
+logger = get_logger("MainWindow")
 
 
 class MainWindow(QMainWindow):
-    """Main Application Window for SmartIDE."""
+    """The central application window for SmartIDE."""
 
-    def __init__(self, initial_project: Optional[Path] = None):
+    def __init__(self, initial_path: Optional[str] = None):
         super().__init__()
         self.settings = SettingsManager()
-        self.current_project_path: Optional[Path] = None
+        self.db_manager = SQLiteManager()
+        self.process: Optional[QProcess] = None
+        self._find_replace_dialog: Optional[FindReplaceDialog] = None
 
-        self._setup_window_properties()
+        self._init_ui()
         self._create_actions()
         self._create_menus()
         self._create_toolbars()
         self._create_status_bar()
-        self._create_docks()
-        self._create_central_widget()
-        self._restore_state(initial_project)
+        self._connect_signals()
+        self._restore_state(initial_path)
 
         logger.info("MainWindow initialized successfully.")
 
-    def _setup_window_properties(self) -> None:
-        """Set up window title and minimum size."""
-        self.setWindowTitle(f"{APP_NAME} - Professional Python IDE")
+    # -------------------------------------------------------------------------
+    # UI Setup
+    # -------------------------------------------------------------------------
+    def _init_ui(self) -> None:
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(1200, 800)
-        self.setMinimumSize(800, 600)
 
-    def _create_actions(self) -> None:
-        """Create QActions for menus, toolbar, and shortcuts."""
-        # File Actions
-        self.action_new_file = QAction("New File", self)
-        self.action_new_file.setShortcut(QKeySequence("Ctrl+N"))
-        self.action_new_file.setStatusTip("Create a new file (Ctrl+N)")
-        self.action_new_file.triggered.connect(self._on_action_not_implemented)
+        # Central Widget: Editor Manager
+        self.editor_manager = EditorManager(self)
+        self.setCentralWidget(self.editor_manager)
 
-        self.action_open_file = QAction("Open File...", self)
-        self.action_open_file.setShortcut(QKeySequence("Ctrl+O"))
-        self.action_open_file.setStatusTip("Open an existing file (Ctrl+O)")
-        self.action_open_file.triggered.connect(self._on_action_not_implemented)
-
-        self.action_save = QAction("Save", self)
-        self.action_save.setShortcut(QKeySequence("Ctrl+S"))
-        self.action_save.setStatusTip("Save the active file (Ctrl+S)")
-        self.action_save.triggered.connect(self._on_action_not_implemented)
-
-        self.action_save_as = QAction("Save As...", self)
-        self.action_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        self.action_save_as.setStatusTip("Save the active file under a new name")
-        self.action_save_as.triggered.connect(self._on_action_not_implemented)
-
-        self.action_close_file = QAction("Close", self)
-        self.action_close_file.setShortcut(QKeySequence("Ctrl+W"))
-        self.action_close_file.setStatusTip("Close the current file")
-        self.action_close_file.triggered.connect(self._on_action_not_implemented)
-
-        self.action_exit = QAction("Exit", self)
-        self.action_exit.setShortcut(QKeySequence("Ctrl+Q"))
-        self.action_exit.setStatusTip("Exit SmartIDE")
-        self.action_exit.triggered.connect(self.close)
-
-        # Edit Actions
-        self.action_undo = QAction("Undo", self)
-        self.action_undo.setShortcut(QKeySequence.StandardKey.Undo)
-        self.action_undo.setStatusTip("Undo previous action")
-
-        self.action_redo = QAction("Redo", self)
-        self.action_redo.setShortcut(QKeySequence.StandardKey.Redo)
-        self.action_redo.setStatusTip("Redo previous action")
-
-        self.action_cut = QAction("Cut", self)
-        self.action_cut.setShortcut(QKeySequence.StandardKey.Cut)
-        self.action_cut.setStatusTip("Cut selected text")
-
-        self.action_copy = QAction("Copy", self)
-        self.action_copy.setShortcut(QKeySequence.StandardKey.Copy)
-        self.action_copy.setStatusTip("Copy selected text")
-
-        self.action_paste = QAction("Paste", self)
-        self.action_paste.setShortcut(QKeySequence.StandardKey.Paste)
-        self.action_paste.setStatusTip("Paste text from clipboard")
-
-        self.action_find = QAction("Find...", self)
-        self.action_find.setShortcut(QKeySequence.StandardKey.Find)
-        self.action_find.setStatusTip("Find text in current file")
-
-        self.action_replace = QAction("Replace...", self)
-        self.action_replace.setShortcut(QKeySequence.StandardKey.Replace)
-        self.action_replace.setStatusTip("Replace text in current file")
-        self.action_open_folder = QAction("Open Folder...", self)
-        self.action_open_folder.setShortcut(QKeySequence("Ctrl+Shift+O"))
-        self.action_open_folder.setStatusTip("Open a project folder")
-        self.action_open_folder.triggered.connect(self.open_project_folder_dialog)
-        self.action_refresh_project = QAction("Refresh Project", self)
-        self.action_refresh_project.setShortcut(QKeySequence("F5"))
-        self.action_refresh_project.setStatusTip("Refresh project file tree (F5)")
-        self.action_refresh_project.triggered.connect(self.refresh_project)
-
-        # Database Actions (Phase 4)
-        self.action_new_db = QAction("New SQLite Database...", self)
-        self.action_new_db.setStatusTip("Create a new SQLite database (Phase 4)")
-        self.action_new_db.triggered.connect(self._on_action_not_implemented)
-
-        self.action_open_db = QAction("Open SQLite Database...", self)
-        self.action_open_db.setStatusTip("Open an existing SQLite database (Phase 4)")
-        self.action_open_db.triggered.connect(self._on_action_not_implemented)
-
-        self.action_close_db = QAction("Close Database", self)
-        self.action_close_db.setStatusTip("Close active database connection")
-        self.action_close_db.triggered.connect(self._on_action_not_implemented)
-
-        # Help Actions
-        self.action_about = QAction("About SmartIDE", self)
-        self.action_about.setStatusTip("About SmartIDE")
-        self.action_about.triggered.connect(self.show_about_dialog)
-
-    def _create_menus(self) -> None:
-        """Create menu bar and hierarchical menus."""
-        menu_bar = self.menuBar()
-
-        # File Menu
-        self.menu_file = menu_bar.addMenu("&File")
-        self.menu_file.addAction(self.action_new_file)
-        self.menu_file.addAction(self.action_open_file)
-        self.menu_file.addAction(self.action_save)
-        self.menu_file.addAction(self.action_save_as)
-        self.menu_file.addSeparator()
-        self.menu_file.addAction(self.action_close_file)
-        self.menu_file.addSeparator()
-        self.menu_file.addAction(self.action_exit)
-
-        # Edit Menu
-        self.menu_edit = menu_bar.addMenu("&Edit")
-        self.menu_edit.addAction(self.action_undo)
-        self.menu_edit.addAction(self.action_redo)
-        self.menu_edit.addSeparator()
-        self.menu_edit.addAction(self.action_cut)
-        self.menu_edit.addAction(self.action_copy)
-        self.menu_edit.addAction(self.action_paste)
-        self.menu_edit.addSeparator()
-        self.menu_edit.addAction(self.action_find)
-        self.menu_edit.addAction(self.action_replace)
-
-        # View Menu
-        self.menu_view = menu_bar.addMenu("&View")
-        # Toggle actions will be added when docks are created
-
-        # Project Menu
-        self.menu_project = menu_bar.addMenu("&Project")
-        self.menu_project.addAction(self.action_open_folder)
-        self.menu_project.addAction(self.action_refresh_project)
-
-        # Database Menu
-        self.menu_database = menu_bar.addMenu("&Database")
-        self.menu_database.addAction(self.action_new_db)
-        self.menu_database.addAction(self.action_open_db)
-        self.menu_database.addAction(self.action_close_db)
-
-        # Help Menu
-        self.menu_help = menu_bar.addMenu("&Help")
-        self.menu_help.addAction(self.action_about)
-
-    def _create_toolbars(self) -> None:
-        """Create main toolbar with essential quick actions."""
-        self.main_toolbar = QToolBar("Main Toolbar", self)
-        self.main_toolbar.setMovable(False)
-        self.main_toolbar.setIconSize(QSize(18, 18))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.main_toolbar)
-
-        # Project actions
-        self.main_toolbar.addAction(self.action_open_folder)
-        self.main_toolbar.addAction(self.action_refresh_project)
-        self.main_toolbar.addSeparator()
-
-        # File actions
-        self.main_toolbar.addAction(self.action_new_file)
-        self.main_toolbar.addAction(self.action_open_file)
-        self.main_toolbar.addAction(self.action_save)
-
-    def _create_status_bar(self) -> None:
-        """Create status bar with status message and info widgets."""
-        self.status_bar = QStatusBar(self)
-        self.setStatusBar(self.status_bar)
-
-        # Left status label
-        self.status_label = QLabel("Ready")
-        self.status_bar.addWidget(self.status_label, stretch=1)
-
-        # Right status widgets
-        self.project_status_label = QLabel("No Project")
-        self.project_status_label.setStyleSheet("color: #ffffff; padding: 0 8px;")
-        self.status_bar.addPermanentWidget(self.project_status_label)
-
-        self.encoding_label = QLabel("UTF-8")
-        self.encoding_label.setStyleSheet("color: #ffffff; padding: 0 8px;")
-        self.status_bar.addPermanentWidget(self.encoding_label)
-
-        self.cursor_label = QLabel("Ln 1, Col 1")
-        self.cursor_label.setStyleSheet("color: #ffffff; padding: 0 8px;")
-        self.status_bar.addPermanentWidget(self.cursor_label)
-
-        self.lang_label = QLabel("Python")
-        self.lang_label.setStyleSheet("color: #ffffff; padding: 0 8px; font-weight: bold;")
-        self.status_bar.addPermanentWidget(self.lang_label)
-
-    def _create_docks(self) -> None:
-        """Create left and right dock widgets."""
-        # 1. Left Dock: File Explorer
-        self.explorer_dock = QDockWidget("File Explorer", self)
-        self.explorer_dock.setObjectName("FileExplorerDock")
+        # Left Dock 1: File Explorer
+        self.explorer_dock = QDockWidget("Project Explorer", self)
+        self.explorer_dock.setObjectName("ProjectExplorerDock")
         self.explorer_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-
-        self.file_explorer = FileExplorerWidget(self.explorer_dock)
-        self.file_explorer.file_double_clicked.connect(self._on_file_double_clicked)
-        self.file_explorer.file_selected.connect(self._on_file_selected)
-        self.file_explorer.project_opened.connect(self._on_project_opened)
-
+        self.file_explorer = FileExplorerWidget(self)
         self.explorer_dock.setWidget(self.file_explorer)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.explorer_dock)
 
-        # 2. Right Dock: Database Explorer (Phase 4 placeholder)
-        self.database_dock = QDockWidget("Database Explorer", self)
-        self.database_dock.setObjectName("DatabaseExplorerDock")
-        self.database_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        # Left Dock 2: Database Explorer
+        self.db_dock = QDockWidget("Database Explorer", self)
+        self.db_dock.setObjectName("DatabaseExplorerDock")
+        self.db_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.db_explorer = DatabaseExplorer(self.db_manager, self)
+        self.db_dock.setWidget(self.db_explorer)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.db_dock)
+        self.tabifyDockWidget(self.explorer_dock, self.db_dock)
+        self.explorer_dock.raise_()
 
-        db_placeholder = QWidget()
-        db_layout = QVBoxLayout(db_placeholder)
-        db_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        db_title = QLabel("DATABASE EXPLORER")
-        db_title.setStyleSheet("font-weight: 600; color: #888888; font-size: 12px;")
-        db_desc = QLabel("SQLite database connection &\nCRUD tools will be enabled in Phase 4.")
-        db_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        db_desc.setStyleSheet("color: #666666; font-size: 11px;")
-        db_layout.addWidget(db_title)
-        db_layout.addWidget(db_desc)
-        self.database_dock.setWidget(db_placeholder)
+        # Bottom Dock: Output & SQL Console
+        self.bottom_dock = QDockWidget("Terminal / Output & Console", self)
+        self.bottom_dock.setObjectName("BottomOutputDock")
+        self.bottom_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea)
 
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.database_dock)
-        # Keep database dock collapsed/hidden initially until needed
-        self.database_dock.hide()
+        self.bottom_tabs = QTabWidget(self)
+        
+        # Execution Output Panel
+        self.output_widget = QWidget()
+        out_layout = QVBoxLayout(self.output_widget)
+        out_layout.setContentsMargins(4, 4, 4, 4)
+        
+        out_btn_bar = QHBoxLayout()
+        self.btn_clear_output = QPushButton("Clear Output")
+        self.btn_stop_process = QPushButton("Stop Process")
+        self.btn_stop_process.setEnabled(False)
+        self.lbl_process_status = QLabel("Idle")
+        out_btn_bar.addWidget(self.btn_clear_output)
+        out_btn_bar.addWidget(self.btn_stop_process)
+        out_btn_bar.addWidget(self.lbl_process_status)
+        out_btn_bar.addStretch()
 
-        # Add toggle actions to View Menu
-        self.menu_view.addAction(self.explorer_dock.toggleViewAction())
-        self.menu_view.addAction(self.database_dock.toggleViewAction())
-        self.menu_view.addSeparator()
+        self.txt_output = QTextEdit()
+        self.txt_output.setReadOnly(True)
+        self.txt_output.setFontFamily("Consolas, Courier New, monospace")
 
-        action_toggle_status_bar = self.status_bar.toggleViewAction() if hasattr(self.status_bar, "toggleViewAction") else None
-        if not action_toggle_status_bar:
-            action_toggle_status_bar = QAction("Status Bar", self, checkable=True)
-            action_toggle_status_bar.setChecked(True)
-            action_toggle_status_bar.toggled.connect(self.status_bar.setVisible)
-        self.menu_view.addAction(action_toggle_status_bar)
+        out_layout.addLayout(out_btn_bar)
+        out_layout.addWidget(self.txt_output)
+        self.bottom_tabs.addTab(self.output_widget, "Execution Output")
 
-    def _create_central_widget(self) -> None:
-        """Create central widget area with welcoming placeholder for Phase 1."""
-        self.central_container = QWidget(self)
-        layout = QVBoxLayout(self.central_container)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(16)
+        # SQL Console
+        self.sql_console = SQLConsole(self.db_manager, self)
+        self.bottom_tabs.addTab(self.sql_console, "SQL Console")
 
-        title_label = QLabel(f"Welcome to {APP_NAME}")
-        title_label.setStyleSheet("font-size: 26px; font-weight: 700; color: #ffffff;")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title_label)
+        self.bottom_dock.setWidget(self.bottom_tabs)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
 
-        sub_label = QLabel(f"Modular Python IDE MVP (v{APP_VERSION}) — Phase 1 Shell")
-        sub_label.setStyleSheet("font-size: 14px; color: #888888;")
-        sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(sub_label)
+    # -------------------------------------------------------------------------
+    # Actions
+    # -------------------------------------------------------------------------
+    def _create_actions(self) -> None:
+        # File Actions
+        self.act_new_file = QAction("&New File", self)
+        self.act_new_file.setShortcut(QKeySequence.StandardKey.New)
+        self.act_new_file.setStatusTip("Create a new scratch file")
+        self.act_new_file.triggered.connect(self._on_action_new_file)
 
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background-color: #252526; border: 1px solid #333333; border-radius: 8px; padding: 24px; }"
-        )
-        card_layout = QVBoxLayout(card)
-        card_layout.setSpacing(12)
+        self.act_open_file = QAction("&Open File...", self)
+        self.act_open_file.setShortcut(QKeySequence.StandardKey.Open)
+        self.act_open_file.setStatusTip("Open a file from disk")
+        self.act_open_file.triggered.connect(self._on_action_open_file)
 
-        prompt_label = QLabel("Get Started:")
-        prompt_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #007acc;")
-        card_layout.addWidget(prompt_label)
+        self.act_open_folder = QAction("Open &Folder...", self)
+        self.act_open_folder.setShortcut(QKeySequence("Ctrl+K, Ctrl+O"))
+        self.act_open_folder.setStatusTip("Open a folder in the File Explorer")
+        self.act_open_folder.triggered.connect(self._on_action_open_folder)
 
-        btn_open = QPushButton("Open Project Folder  (Ctrl+Shift+O)")
-        btn_open.clicked.connect(self.open_project_folder_dialog)
-        card_layout.addWidget(btn_open)
+        self.act_save_file = QAction("&Save", self)
+        self.act_save_file.setShortcut(QKeySequence.StandardKey.Save)
+        self.act_save_file.setStatusTip("Save the active document")
+        self.act_save_file.triggered.connect(self.editor_manager.save_current)
 
-        info_label = QLabel(
-            "• Use the File Explorer on the left to browse project files.\n"
-            "• Phase 2 will introduce the QScintilla code editor with tabs and Python syntax highlighting."
-        )
-        info_label.setStyleSheet("color: #aaaaaa; font-size: 12px; line-height: 1.5;")
-        card_layout.addWidget(info_label)
+        self.act_save_as = QAction("Save &As...", self)
+        self.act_save_as.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.act_save_as.setStatusTip("Save the active document with a new name")
+        self.act_save_as.triggered.connect(self.editor_manager.save_current_as)
 
-        layout.addWidget(card)
-        self.setCentralWidget(self.central_container)
+        self.act_save_all = QAction("Save A&ll", self)
+        self.act_save_all.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.act_save_all.setStatusTip("Save all open modified documents")
+        self.act_save_all.triggered.connect(self.editor_manager.save_all)
 
-    def open_project_folder_dialog(self) -> None:
-        """Show directory picker dialog to open a project folder."""
-        initial_dir = str(self.current_project_path) if self.current_project_path else str(Path.cwd())
-        chosen_dir = QFileDialog.getExistingDirectory(
+        self.act_close_file = QAction("&Close File", self)
+        self.act_close_file.setShortcut(QKeySequence.StandardKey.Close)
+        self.act_close_file.setStatusTip("Close the active tab")
+        self.act_close_file.triggered.connect(self.editor_manager.close_current_tab)
+
+        self.act_exit = QAction("E&xit", self)
+        self.act_exit.setShortcut(QKeySequence.StandardKey.Quit)
+        self.act_exit.setStatusTip("Exit SmartIDE")
+        self.act_exit.triggered.connect(self.close)
+
+        # Edit Actions
+        self.act_undo = QAction("&Undo", self)
+        self.act_undo.setShortcut(QKeySequence.StandardKey.Undo)
+        self.act_undo.triggered.connect(self._on_action_undo)
+
+        self.act_redo = QAction("&Redo", self)
+        self.act_redo.setShortcut(QKeySequence.StandardKey.Redo)
+        self.act_redo.triggered.connect(self._on_action_redo)
+
+        self.act_cut = QAction("Cu&t", self)
+        self.act_cut.setShortcut(QKeySequence.StandardKey.Cut)
+        self.act_cut.triggered.connect(self._on_action_cut)
+
+        self.act_copy = QAction("&Copy", self)
+        self.act_copy.setShortcut(QKeySequence.StandardKey.Copy)
+        self.act_copy.triggered.connect(self._on_action_copy)
+
+        self.act_paste = QAction("&Paste", self)
+        self.act_paste.setShortcut(QKeySequence.StandardKey.Paste)
+        self.act_paste.triggered.connect(self._on_action_paste)
+
+        self.act_select_all = QAction("Select &All", self)
+        self.act_select_all.setShortcut(QKeySequence.StandardKey.SelectAll)
+        self.act_select_all.triggered.connect(self._on_action_select_all)
+
+        self.act_find_replace = QAction("&Find and Replace...", self)
+        self.act_find_replace.setShortcut(QKeySequence.StandardKey.Find)
+        self.act_find_replace.triggered.connect(self._on_action_find_replace)
+
+        # View Actions
+        self.act_toggle_explorer = self.explorer_dock.toggleViewAction()
+        self.act_toggle_explorer.setText("Show Project &Explorer")
+
+        self.act_toggle_db = self.db_dock.toggleViewAction()
+        self.act_toggle_db.setText("Show &Database Explorer")
+
+        self.act_toggle_output = self.bottom_dock.toggleViewAction()
+        self.act_toggle_output.setText("Show &Output Dock")
+
+        # Run Actions
+        self.act_run = QAction("&Run Current File", self)
+        self.act_run.setShortcut(QKeySequence("F5"))
+        self.act_run.setStatusTip("Execute the current file with Python")
+        self.act_run.triggered.connect(self.run_current_file)
+
+        # Database Actions
+        self.act_db_connect = QAction("&Connect Database...", self)
+        self.act_db_connect.triggered.connect(self._on_action_connect_db)
+
+        self.act_db_new = QAction("&Create New SQLite DB...", self)
+        self.act_db_new.triggered.connect(self._on_action_new_db)
+
+        self.act_db_disconnect = QAction("&Disconnect Database", self)
+        self.act_db_disconnect.triggered.connect(self._on_action_disconnect_db)
+
+        # Help Actions
+        self.act_about = QAction("&About SmartIDE", self)
+        self.act_about.triggered.connect(self._on_action_about)
+
+    # -------------------------------------------------------------------------
+    # Menus
+    # -------------------------------------------------------------------------
+    def _create_menus(self) -> None:
+        mb = self.menuBar()
+
+        # File Menu
+        menu_file = mb.addMenu("&File")
+        menu_file.addAction(self.act_new_file)
+        menu_file.addAction(self.act_open_file)
+        menu_file.addAction(self.act_open_folder)
+        menu_file.addSeparator()
+        menu_file.addAction(self.act_save_file)
+        menu_file.addAction(self.act_save_as)
+        menu_file.addAction(self.act_save_all)
+        menu_file.addSeparator()
+        menu_file.addAction(self.act_close_file)
+        menu_file.addSeparator()
+        menu_file.addAction(self.act_exit)
+
+        # Edit Menu
+        menu_edit = mb.addMenu("&Edit")
+        menu_edit.addAction(self.act_undo)
+        menu_edit.addAction(self.act_redo)
+        menu_edit.addSeparator()
+        menu_edit.addAction(self.act_cut)
+        menu_edit.addAction(self.act_copy)
+        menu_edit.addAction(self.act_paste)
+        menu_edit.addSeparator()
+        menu_edit.addAction(self.act_select_all)
+        menu_edit.addSeparator()
+        menu_edit.addAction(self.act_find_replace)
+
+        # View Menu
+        menu_view = mb.addMenu("&View")
+        menu_view.addAction(self.act_toggle_explorer)
+        menu_view.addAction(self.act_toggle_db)
+        menu_view.addAction(self.act_toggle_output)
+
+        # Run Menu
+        menu_run = mb.addMenu("&Run")
+        menu_run.addAction(self.act_run)
+
+        # Database Menu
+        menu_db = mb.addMenu("&Database")
+        menu_db.addAction(self.act_db_connect)
+        menu_db.addAction(self.act_db_new)
+        menu_db.addAction(self.act_db_disconnect)
+
+        # Help Menu
+        menu_help = mb.addMenu("&Help")
+        menu_help.addAction(self.act_about)
+
+    # -------------------------------------------------------------------------
+    # Toolbars
+    # -------------------------------------------------------------------------
+    def _create_toolbars(self) -> None:
+        tb = self.addToolBar("Main Toolbar")
+        tb.setObjectName("MainToolBar")
+        tb.setMovable(False)
+
+        tb.addAction(self.act_new_file)
+        tb.addAction(self.act_open_file)
+        tb.addAction(self.act_open_folder)
+        tb.addAction(self.act_save_file)
+        tb.addAction(self.act_save_all)
+        tb.addSeparator()
+        tb.addAction(self.act_undo)
+        tb.addAction(self.act_redo)
+        tb.addAction(self.act_find_replace)
+        tb.addSeparator()
+        tb.addAction(self.act_run)
+        tb.addSeparator()
+        tb.addAction(self.act_db_connect)
+
+    # -------------------------------------------------------------------------
+    # Status Bar
+    # -------------------------------------------------------------------------
+    def _create_status_bar(self) -> None:
+        sb = QStatusBar(self)
+        self.setStatusBar(sb)
+
+        self.lbl_cursor_pos = QLabel("Line 1, Col 1")
+        self.lbl_file_info = QLabel("UTF-8")
+        self.lbl_lang = QLabel("Plain Text")
+        self.lbl_db_status = QLabel("DB: Disconnected")
+
+        sb.addPermanentWidget(self.lbl_db_status)
+        sb.addPermanentWidget(self.lbl_cursor_pos)
+        sb.addPermanentWidget(self.lbl_lang)
+        sb.addPermanentWidget(self.lbl_file_info)
+
+        sb.showMessage("Ready", 3000)
+
+    # -------------------------------------------------------------------------
+    # Signal Connections
+    # -------------------------------------------------------------------------
+    def _connect_signals(self) -> None:
+        # File explorer double-click -> open file
+        self.file_explorer.file_opened.connect(self._on_file_opened_from_explorer)
+
+        # EditorManager tab changes -> update status bar
+        self.editor_manager.tab_changed.connect(self._on_tab_changed)
+
+        # Bottom output controls
+        self.btn_clear_output.clicked.connect(self.txt_output.clear)
+        self.btn_stop_process.clicked.connect(self._stop_running_process)
+
+        # DB Explorer view table signal
+        self.db_explorer.table_selected.connect(self._on_view_table)
+
+    # -------------------------------------------------------------------------
+    # State Persistence
+    # -------------------------------------------------------------------------
+    def _restore_state(self, initial_path: Optional[str] = None) -> None:
+        # Restore window geometry
+        geom = self.settings.get("window_geometry")
+        if geom:
+            try:
+                self.restoreGeometry(QByteArray.fromHex(geom.encode()))
+            except Exception:
+                pass
+
+        # Open target file or folder
+        if initial_path and os.path.exists(initial_path):
+            if os.path.isfile(initial_path):
+                self.editor_manager.open_file(Path(initial_path))
+                self.file_explorer.set_root_path(str(Path(initial_path).parent))
+            else:
+                self.file_explorer.set_root_path(initial_path)
+                self.settings.set("last_project", initial_path)
+        else:
+            # Check last project, but make sure it is safe and exists
+            last_proj = self.settings.get("last_project")
+            if last_proj and os.path.exists(last_proj):
+                self.file_explorer.set_root_path(last_proj)
+
+        # Ensure an active editor tab is immediately available to write code
+        if self.editor_manager.count() == 0:
+            self.editor_manager.new_file()
+
+    def closeEvent(self, event) -> None:
+        """Handle window close event with dirty file verification."""
+        if not self.editor_manager.close_all_tabs():
+            event.ignore()
+            return
+
+        # Save geometry
+        geom_hex = self.saveGeometry().toHex().data().decode()
+        self.settings.set("window_geometry", geom_hex)
+
+        # Kill any running process
+        self._stop_running_process()
+
+        # Disconnect DB
+        self.db_manager.disconnect()
+
+        event.accept()
+
+    # -------------------------------------------------------------------------
+    # Handlers & Slots
+    # -------------------------------------------------------------------------
+    @Slot(str)
+    def _on_file_opened_from_explorer(self, file_path: str) -> None:
+        self.editor_manager.open_file(file_path)
+
+    @Slot(int)
+    def _on_tab_changed(self, index: int) -> None:
+        editor = self.editor_manager.current_editor()
+        if editor:
+            self.lbl_lang.setText(editor.language.capitalize())
+            line = editor.get_current_line()
+            col = editor.get_current_column()
+            self.lbl_cursor_pos.setText(f"Line {line}, Col {col}")
+            editor.cursor_position_changed.connect(self._on_cursor_moved)
+        else:
+            self.lbl_lang.setText("None")
+            self.lbl_cursor_pos.setText("")
+
+    @Slot(int, int)
+    def _on_cursor_moved(self, line: int, col: int) -> None:
+        self.lbl_cursor_pos.setText(f"Line {line}, Col {col}")
+
+    def _on_action_new_file(self) -> None:
+        self.editor_manager.new_file()
+
+    def _on_action_open_file(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Project Folder",
-            initial_dir,
-            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
+            "Open File",
+            "",
+            "Python Files (*.py *.pyw);;SQL Files (*.sql);;Text Files (*.txt *.md);;All Files (*.*)"
         )
-        if chosen_dir:
-            self.set_project_path(Path(chosen_dir))
+        for f in files:
+            self.editor_manager.open_file(f)
 
-    def set_project_path(self, path: Path | str) -> bool:
-        """Set project path in window, file explorer, and settings using FileManager validation."""
-        p = Path(path).resolve()
-        if not FileManager.is_valid_directory(p):
-            QMessageBox.critical(self, "Error", f"Invalid project folder:\n{p}")
-            return False
+    def _on_action_open_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Open Folder / Project")
+        if folder:
+            self.file_explorer.set_root_path(folder)
+            self.settings.set("last_project", folder)
+            self.statusBar().showMessage(f"Opened project: {folder}", 3000)
 
-        self.current_project_path = p
-        self.file_explorer.set_project_path(p)
-        self.setWindowTitle(f"{APP_NAME} - {p.name} [{p}]")
-        self.project_status_label.setText(f"Project: {p.name}")
-        self.status_label.setText(f"Opened project: {p}")
-        self.settings.set_last_project(p)
-        logger.info("Project set to: %s", p)
-        return True
+    def _on_action_undo(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.undo()
 
-    def refresh_project(self) -> None:
-        """Refresh current project tree view."""
-        self.file_explorer.refresh()
-        self.status_label.setText("Project explorer refreshed.")
+    def _on_action_redo(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.redo()
 
-    def show_about_dialog(self) -> None:
-        """Show About dialog."""
+    def _on_action_cut(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.cut()
+
+    def _on_action_copy(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.copy()
+
+    def _on_action_paste(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.paste()
+
+    def _on_action_select_all(self) -> None:
+        ed = self.editor_manager.current_editor()
+        if ed:
+            ed.select_all()
+
+    def _on_action_find_replace(self) -> None:
+        if self._find_replace_dialog is None:
+            self._find_replace_dialog = FindReplaceDialog(self.editor_manager, self)
+        self._find_replace_dialog.show()
+        self._find_replace_dialog.raise_()
+        self._find_replace_dialog.activateWindow()
+
+    # -------------------------------------------------------------------------
+    # Code Execution
+    # -------------------------------------------------------------------------
+    def run_current_file(self) -> None:
+        editor = self.editor_manager.current_editor()
+        if not editor:
+            QMessageBox.information(self, "Run", "No file is open to run.")
+            return
+
+        if editor.is_modified() or not editor.file_path:
+            # Prompt to save
+            saved = self.editor_manager.save_current()
+            if not saved:
+                return
+
+        file_path = editor.file_path
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, "Run Error", "Cannot execute an unsaved file.")
+            return
+
+        self._stop_running_process()
+
+        self.txt_output.clear()
+        self.txt_output.append(f"=== Running: {file_path} ===\n")
+        self.bottom_dock.show()
+        self.bottom_dock.raise_()
+        self.bottom_tabs.setCurrentWidget(self.output_widget)
+
+        self.process = QProcess(self)
+        self.process.setProgram(sys.executable)
+        self.process.setArguments(["-u", file_path])
+        self.process.setWorkingDirectory(str(Path(file_path).parent))
+
+        self.process.readyReadStandardOutput.connect(self._on_process_stdout)
+        self.process.readyReadStandardError.connect(self._on_process_stderr)
+        self.process.finished.connect(self._on_process_finished)
+
+        self.btn_stop_process.setEnabled(True)
+        self.lbl_process_status.setText("Running...")
+        self.process.start()
+
+    def _on_process_stdout(self) -> None:
+        if self.process:
+            data = self.process.readAllStandardOutput().data().decode("utf-8", errors="replace")
+            self.txt_output.insertPlainText(data)
+
+    def _on_process_stderr(self) -> None:
+        if self.process:
+            data = self.process.readAllStandardError().data().decode("utf-8", errors="replace")
+            self.txt_output.insertPlainText(data)
+
+    def _on_process_finished(self, exit_code: int) -> None:
+        self.txt_output.append(f"\n=== Process finished with exit code {exit_code} ===")
+        self.btn_stop_process.setEnabled(False)
+        self.lbl_process_status.setText(f"Exited ({exit_code})")
+        self.process = None
+
+    def _stop_running_process(self) -> None:
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.kill()
+            self.process.waitForFinished(1000)
+            self.lbl_process_status.setText("Terminated")
+            self.btn_stop_process.setEnabled(False)
+
+    # -------------------------------------------------------------------------
+    # Database Actions
+    # -------------------------------------------------------------------------
+    def _on_action_connect_db(self) -> None:
+        db_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select SQLite Database",
+            "",
+            "SQLite Databases (*.db *.sqlite *.sqlite3);;All Files (*.*)"
+        )
+        if db_file:
+            success, msg = self.db_manager.connect(db_file)
+            if success:
+                self.lbl_db_status.setText(f"DB: {Path(db_file).name}")
+                self.db_explorer.refresh()
+                self.sql_console.update_connection_status()
+                self.statusBar().showMessage(f"Connected to database: {db_file}", 3000)
+            else:
+                QMessageBox.critical(self, "Connection Error", f"Failed to connect:\n{msg}")
+
+    def _on_action_new_db(self) -> None:
+        db_file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create New SQLite Database",
+            "",
+            "SQLite Databases (*.db *.sqlite3)"
+        )
+        if db_file:
+            # Ensure .db extension
+            if not db_file.endswith((".db", ".sqlite", ".sqlite3")):
+                db_file += ".db"
+            success, msg = self.db_manager.connect(db_file)
+            if success:
+                self.lbl_db_status.setText(f"DB: {Path(db_file).name}")
+                self.db_explorer.refresh()
+                self.sql_console.update_connection_status()
+                self.statusBar().showMessage(f"Created database: {db_file}", 3000)
+            else:
+                QMessageBox.critical(self, "Creation Error", f"Failed to create database:\n{msg}")
+
+    def _on_action_disconnect_db(self) -> None:
+        self.db_manager.disconnect()
+        self.lbl_db_status.setText("DB: Disconnected")
+        self.db_explorer.refresh()
+        self.sql_console.update_connection_status()
+        self.statusBar().showMessage("Database disconnected", 3000)
+
+    @Slot(str)
+    def _on_view_table(self, table_name: str) -> None:
+        if not self.db_manager.is_connected():
+            return
+        dialog = TableViewerDialog(self.db_manager, table_name, self)
+        dialog.exec()
+
+    def _on_action_about(self) -> None:
         QMessageBox.about(
             self,
             f"About {APP_NAME}",
             f"<h3>{APP_NAME} v{APP_VERSION}</h3>"
-            f"<p>A clean, modular Python IDE MVP built with PySide6 and SQLite3.</p>"
-            f"<p><b>Phase 1 Completed:</b></p>"
-            f"<ul>"
-            f"<li>Application Shell & Dark Theme</li>"
-            f"<li>File Explorer with Qt Model/View Architecture</li>"
-            f"<li>Project Folder Management</li>"
-            f"<li>Menu Bar, Toolbars, and Status Bar</li>"
-            f"<li>Dockable Panel Architecture</li>"
-            f"</ul>"
-            f"<p>Designed for industrial modularity and future extensibility.</p>",
+            f"<p>A professional Python Desktop IDE built with PySide6, QScintilla, and SQLite.</p>"
+            f"<p>Features file explorer, syntax highlighting, integrated code runner, and embedded database manager.</p>"
         )
-
-    def _on_file_double_clicked(self, file_path: Path) -> None:
-        """Handle file double clicked in file explorer."""
-        self.status_label.setText(f"Selected: {file_path.name}")
-        logger.info("File selected for opening in Phase 2: %s", file_path)
-
-    def _on_file_selected(self, file_path: Path) -> None:
-        """Handle single click in file explorer."""
-        self.status_label.setText(str(file_path))
-
-    def _on_project_opened(self, project_path: Path) -> None:
-        """Handle project opened signal from explorer."""
-        self.current_project_path = project_path
-        self.setWindowTitle(f"{APP_NAME} - {project_path.name}")
-        self.project_status_label.setText(f"Project: {project_path.name}")
-
-    def _on_action_not_implemented(self) -> None:
-        """Notify user that feature will be enabled in subsequent phase."""
-        sender = self.sender()
-        action_name = sender.text() if sender else "Action"
-        QMessageBox.information(
-            self,
-            "Feature in Next Phase",
-            f"'{action_name}' is scheduled for implementation in Phase 2 (Code Editor & Tabs).",
-        )
-
-    def _restore_state(self, initial_project: Optional[Path] = None) -> None:
-        """Restore window geometry and project from settings or CLI arguments."""
-        geom = self.settings.get_window_geometry()
-        if geom:
-            self.restoreGeometry(geom)
-
-        state = self.settings.get_window_state()
-        if state:
-            self.restoreState(state)
-
-        # Restore project
-        target_project = initial_project or self.settings.get_last_project() or Path.cwd()
-        if target_project and FileManager.is_valid_directory(target_project):
-            self.set_project_path(target_project)
-
-    def closeEvent(self, event) -> None:
-        """Save settings and geometry on application close."""
-        self.settings.set_window_geometry(self.saveGeometry())
-        self.settings.set_window_state(self.saveState())
-        logger.info("MainWindow closing, geometry and state persisted.")
-        super().closeEvent(event)

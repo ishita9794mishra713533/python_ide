@@ -1,4 +1,10 @@
-"""SmartIDE - Entry Point."""
+"""
+SmartIDE - Application Entry Point
+Initializes Qt application, configures themes and settings, and launches MainWindow.
+"""
+
+from __future__ import annotations
+
 import sys
 import argparse
 from pathlib import Path
@@ -6,70 +12,51 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
-from utils.logger import setup_logger, get_logger
-from utils.constants import APP_NAME, APP_ORGANIZATION, APP_DOMAIN
-from app.styles import apply_dark_theme
 from app.main_window import MainWindow
-from explorer.file_manager import FileManager
+from app.styles import DarkTheme
+from app.settings import SettingsManager
+from utils.constants import APP_NAME, APP_VERSION
+from utils.logger import get_logger
+
+logger = get_logger("SmartIDE")
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description=f"{APP_NAME} - Modular Python Desktop IDE")
-    parser.add_argument(
-        "project_path",
-        nargs="?",
-        default=None,
-        help="Optional path to a project folder to open on startup",
-    )
+def parse_args():
+    parser = argparse.ArgumentParser(description=f"{APP_NAME} v{APP_VERSION} - Desktop Python IDE")
+    parser.add_argument("path", nargs="?", default=None, help="Initial project folder or file to open")
+    parser.add_argument("--reset-project", action="store_true", help="Clear remembered project folder")
     return parser.parse_args()
 
 
-def validate_initial_project(project_path_arg: str | None) -> Path | None:
-    """Validate initial project path given via command line using FileManager validation."""
-    if not project_path_arg:
-        return None
-    candidate = Path(project_path_arg).resolve()
-    if FileManager.is_valid_directory(candidate):
-        return candidate
-    return None
-
-
 def main() -> int:
-    """Main application lifecycle runner."""
-    # 1. Setup centralized logging
-    logger = setup_logger()
-    logger.info("Starting %s application...", APP_NAME)
+    args = parse_args()
+    logger.info("Starting %s v%s", APP_NAME, APP_VERSION)
 
-    # 2. Parse arguments and validate project path using FileManager
-    args = parse_arguments()
-    initial_project = validate_initial_project(args.project_path)
-
-    if args.project_path and not initial_project:
-        logger.warning("Provided CLI project path is invalid or non-existent: %s", args.project_path)
-    elif initial_project:
-        logger.info("Validated CLI project path: %s", initial_project)
-
-    # 3. Create Qt Application
-    # Enable High DPI scaling
-    QApplication.setOrganizationName(APP_ORGANIZATION)
-    QApplication.setOrganizationDomain(APP_DOMAIN)
-    QApplication.setApplicationName(APP_NAME)
-
+    # Initialize Qt Application
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
 
-    # 4. Apply Dark Professional Theme
-    apply_dark_theme(app)
+    # Apply dark theme
+    app.setStyleSheet(DarkTheme.get_stylesheet())
 
-    # 5. Initialize Main Window
-    window = MainWindow(initial_project=initial_project)
+    # Handle --reset-project
+    if args.reset_project:
+        settings = SettingsManager()
+        settings.clear_last_project()
+        logger.info("Cleared last opened project path from settings.")
+
+    # Determine initial directory
+    initial_path = args.path
+    if initial_path:
+        initial_path = str(Path(initial_path).resolve())
+
+    # Launch Main Window
+    window = MainWindow(initial_path=initial_path)
     window.show()
 
-    logger.info("%s ready and event loop started.", APP_NAME)
     return app.exec()
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
