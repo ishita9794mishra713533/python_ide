@@ -25,6 +25,7 @@ from utils.constants import APP_NAME, APP_VERSION
 from utils.logger import get_logger
 from app.settings import SettingsManager
 from explorer.file_explorer import FileExplorerWidget
+from explorer.file_manager import FileManager
 
 logger = get_logger("main_window")
 
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
         self.action_about.setStatusTip("About SmartIDE")
         self.action_about.triggered.connect(self.show_about_dialog)
 
-def _create_menus(self) -> None:
+    def _create_menus(self) -> None:
         """Create menu bar and hierarchical menus."""
         menu_bar = self.menuBar()
 
@@ -188,7 +189,7 @@ def _create_menus(self) -> None:
         self.menu_help = menu_bar.addMenu("&Help")
         self.menu_help.addAction(self.action_about)
 
-def _create_toolbars(self) -> None:
+    def _create_toolbars(self) -> None:
         """Create main toolbar with essential quick actions."""
         self.main_toolbar = QToolBar("Main Toolbar", self)
         self.main_toolbar.setMovable(False)
@@ -205,7 +206,7 @@ def _create_toolbars(self) -> None:
         self.main_toolbar.addAction(self.action_open_file)
         self.main_toolbar.addAction(self.action_save)
 
-def _create_status_bar(self) -> None:
+    def _create_status_bar(self) -> None:
         """Create status bar with status message and info widgets."""
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
@@ -231,7 +232,7 @@ def _create_status_bar(self) -> None:
         self.lang_label.setStyleSheet("color: #ffffff; padding: 0 8px; font-weight: bold;")
         self.status_bar.addPermanentWidget(self.lang_label)
 
-def _create_docks(self) -> None:
+    def _create_docks(self) -> None:
         """Create left and right dock widgets."""
         # 1. Left Dock: File Explorer
         self.explorer_dock = QDockWidget("File Explorer", self)
@@ -279,7 +280,7 @@ def _create_docks(self) -> None:
             action_toggle_status_bar.toggled.connect(self.status_bar.setVisible)
         self.menu_view.addAction(action_toggle_status_bar)
 
-def _create_central_widget(self) -> None:
+    def _create_central_widget(self) -> None:
         """Create central widget area with welcoming placeholder for Phase 1."""
         self.central_container = QWidget(self)
         layout = QVBoxLayout(self.central_container)
@@ -322,7 +323,7 @@ def _create_central_widget(self) -> None:
         layout.addWidget(card)
         self.setCentralWidget(self.central_container)
 
-def open_project_folder_dialog(self) -> None:
+    def open_project_folder_dialog(self) -> None:
         """Show directory picker dialog to open a project folder."""
         initial_dir = str(self.current_project_path) if self.current_project_path else str(Path.cwd())
         chosen_dir = QFileDialog.getExistingDirectory(
@@ -334,10 +335,10 @@ def open_project_folder_dialog(self) -> None:
         if chosen_dir:
             self.set_project_path(Path(chosen_dir))
 
-def set_project_path(self, path: Path | str) -> bool:
-        """Set project path in window, file explorer, and settings."""
+    def set_project_path(self, path: Path | str) -> bool:
+        """Set project path in window, file explorer, and settings using FileManager validation."""
         p = Path(path).resolve()
-        if not p.is_dir():
+        if not FileManager.is_valid_directory(p):
             QMessageBox.critical(self, "Error", f"Invalid project folder:\n{p}")
             return False
 
@@ -350,12 +351,12 @@ def set_project_path(self, path: Path | str) -> bool:
         logger.info("Project set to: %s", p)
         return True
 
-def refresh_project(self) -> None:
+    def refresh_project(self) -> None:
         """Refresh current project tree view."""
         self.file_explorer.refresh()
         self.status_label.setText("Project explorer refreshed.")
 
-def show_about_dialog(self) -> None:
+    def show_about_dialog(self) -> None:
         """Show About dialog."""
         QMessageBox.about(
             self,
@@ -373,22 +374,22 @@ def show_about_dialog(self) -> None:
             f"<p>Designed for industrial modularity and future extensibility.</p>",
         )
 
-def _on_file_double_clicked(self, file_path: Path) -> None:
+    def _on_file_double_clicked(self, file_path: Path) -> None:
         """Handle file double clicked in file explorer."""
         self.status_label.setText(f"Selected: {file_path.name}")
         logger.info("File selected for opening in Phase 2: %s", file_path)
 
-def _on_file_selected(self, file_path: Path) -> None:
+    def _on_file_selected(self, file_path: Path) -> None:
         """Handle single click in file explorer."""
         self.status_label.setText(str(file_path))
 
-def _on_project_opened(self, project_path: Path) -> None:
+    def _on_project_opened(self, project_path: Path) -> None:
         """Handle project opened signal from explorer."""
         self.current_project_path = project_path
         self.setWindowTitle(f"{APP_NAME} - {project_path.name}")
         self.project_status_label.setText(f"Project: {project_path.name}")
 
-def _on_action_not_implemented(self) -> None:
+    def _on_action_not_implemented(self) -> None:
         """Notify user that feature will be enabled in subsequent phase."""
         sender = self.sender()
         action_name = sender.text() if sender else "Action"
@@ -398,7 +399,7 @@ def _on_action_not_implemented(self) -> None:
             f"'{action_name}' is scheduled for implementation in Phase 2 (Code Editor & Tabs).",
         )
 
-def _restore_state(self, initial_project: Optional[Path] = None) -> None:
+    def _restore_state(self, initial_project: Optional[Path] = None) -> None:
         """Restore window geometry and project from settings or CLI arguments."""
         geom = self.settings.get_window_geometry()
         if geom:
@@ -410,10 +411,10 @@ def _restore_state(self, initial_project: Optional[Path] = None) -> None:
 
         # Restore project
         target_project = initial_project or self.settings.get_last_project() or Path.cwd()
-        if target_project and target_project.is_dir():
+        if target_project and FileManager.is_valid_directory(target_project):
             self.set_project_path(target_project)
 
-def closeEvent(self, event) -> None:
+    def closeEvent(self, event) -> None:
         """Save settings and geometry on application close."""
         self.settings.set_window_geometry(self.saveGeometry())
         self.settings.set_window_state(self.saveState())
